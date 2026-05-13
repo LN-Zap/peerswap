@@ -26,7 +26,6 @@ import (
 	"github.com/elementsproject/peerswap/version"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/elementsproject/glightning/gelements"
 	"github.com/elementsproject/peerswap/cmd/peerswaplnd"
@@ -47,6 +46,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/encoding/protojson"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -97,11 +97,10 @@ func run() error {
 		return err
 	}
 
-	logger, closeFunc, err := NewLndLogger(cfg)
+	logger, err := NewLndLogger(cfg)
 	if err != nil {
 		return err
 	}
-	defer closeFunc()
 	log.SetLogger(logger)
 
 	// make datadir
@@ -168,10 +167,12 @@ func run() error {
 			return err
 		}
 
+		bitcoinFeeFloor := onchain.LegacyFeeFloorSatPerKw
+
 		// Start the LndEstimator.
 		lndEstimator, err := onchain.NewLndEstimator(
 			walletrpc.NewWalletKitClient(cc),
-			btcutil.Amount(253),
+			bitcoinFeeFloor,
 			10*time.Minute,
 		)
 		if err != nil {
@@ -181,14 +182,11 @@ func run() error {
 			return err
 		}
 
-		// Create the bitcoin onchain service with a fallback fee rate of
-		// 253 sat/kw.
-		// TODO: This fee rate does not matter right now but we might want to
-		// add a config flag to set this higher than the assumed floor fee rate
-		// of 275 sat/kw (1.1 sat/vb).
+		// Keep estimator and fallback paths aligned by reusing the same fee floor.
 		bitcoinOnChainService = onchain.NewBitcoinOnChain(
 			lndEstimator,
-			btcutil.Amount(253),
+			bitcoinFeeFloor,
+			bitcoinFeeFloor,
 			chain,
 		)
 		log.Infof("Bitcoin swaps enabled on network %s", chain.Name)
@@ -609,23 +607,32 @@ type LndLogger struct {
 	loglevel peerswaplnd.LogLevel
 }
 
-func NewLndLogger(cfg *peerswaplnd.PeerSwapConfig) (*LndLogger, func() error, error) {
-	logFile, err := os.OpenFile(filepath.Join(cfg.DataDir, "log"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+func NewLndLogger(cfg *peerswaplnd.PeerSwapConfig) (*LndLogger, error) {
+	err := os.MkdirAll(cfg.DataDir, 0755)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	w := io.MultiWriter(os.Stdout, logFile)
+	logFile := filepath.Join(cfg.DataDir, "log")
+
 	core_log.SetFlags(core_log.LstdFlags | core_log.LUTC)
+
+	w := io.MultiWriter(os.Stdout, &lumberjack.Logger{
+		Filename:   logFile,
+		MaxSize:    cfg.LogRotation.MaxSize,
+		MaxBackups: cfg.LogRotation.MaxBackups,
+		MaxAge:     cfg.LogRotation.MaxAge,
+		Compress:   cfg.LogRotation.Compress,
+	})
 	core_log.SetOutput(w)
 
-	return &LndLogger{loglevel: cfg.LogLevel}, logFile.Close, nil
+	return &LndLogger{loglevel: cfg.LogLevel}, nil
 }
 
-func (l *LndLogger) Infof(format string, v ...interface{}) {
+func (l *LndLogger) Infof(format string, v ...any) {
 	core_log.Printf("[INFO] "+format, v...)
 }
 
-func (l *LndLogger) Debugf(format string, v ...interface{}) {
+func (l *LndLogger) Debugf(format string, v ...any) {
 	if l.loglevel == peerswaplnd.LOGLEVEL_DEBUG {
 		core_log.Printf("[DEBUG] "+format, v...)
 	}

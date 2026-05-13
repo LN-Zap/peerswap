@@ -74,7 +74,7 @@ func (g *LiquidGetAddress) Get(client *ClightningClient) jrpc2.ServerMethod {
 	}
 }
 
-// GetBalance returns the liquid balance
+// LiquidGetBalance returns the liquid balance
 type LiquidGetBalance struct {
 	cl *ClightningClient
 }
@@ -173,7 +173,7 @@ func (s *LiquidSendToAddress) LongDescription() string {
 	return "'"
 }
 
-// SwapOut starts a new swapout (paying an Invoice for onchain liquidity)
+// SwapOut starts a new swapout (paying an invoice for onchain liquidity)
 type SwapOut struct {
 	ShortChannelId      string            `json:"short_channel_id"`
 	SatAmt              uint64            `json:"amt_sat"`
